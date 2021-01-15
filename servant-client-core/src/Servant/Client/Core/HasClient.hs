@@ -119,12 +119,14 @@ clientIn p pm = clientWithRoute pm p defaultRequest
 -- Unless you are writing a new backend for @servant-client-core@ or new
 -- combinators that you want to support client-generation, you can ignore this
 -- class.
-class RunClient m => HasClient m api where
+class HasClient api where
   type Client (m :: * -> *) (api :: *) :: *
-  clientWithRoute :: Proxy m -> Proxy api -> Request -> Client m api
+
+  clientWithRoute ::
+    RunClient m => Proxy api -> Request -> Client m api
+
   hoistClientMonad
-    :: Proxy m
-    -> Proxy api
+    :: Proxy api
     -> (forall x. mon x -> mon' x)
     -> Client mon api
     -> Client mon' api
