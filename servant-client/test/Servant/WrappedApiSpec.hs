@@ -41,7 +41,7 @@ spec = describe "Servant.WrappedApiSpec" $ do
 
 data WrappedApi where
   WrappedApi :: (HasServer (api :: *) '[], Server api ~ Handler a,
-                 HasClient ClientM api, Client ClientM api ~ ClientM ()) =>
+                 HasClient api, ClientConstraints api ClientM, Client ClientM api ~ ClientM ()) =>
     Proxy api -> WrappedApi
 
 wrappedApiSpec :: Spec

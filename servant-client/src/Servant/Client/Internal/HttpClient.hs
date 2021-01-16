@@ -107,7 +107,7 @@ mkClientEnv mgr burl = ClientEnv mgr burl Nothing defaultMakeClientRequest
 -- > getInt :: Int -> ClientM Int
 -- > getBools :: ClientM [Bool]
 -- > getInt :<|> getBools = client api
-client :: HasClient ClientM api => Proxy api -> Client ClientM api
+client :: (ClientConstraints api ClientM, HasClient api) => Proxy api -> Client ClientM api
 client api = api `clientIn` (Proxy :: Proxy ClientM)
 
 -- | Change the monad the client functions live in, by
@@ -125,7 +125,7 @@ client api = api `clientIn` (Proxy :: Proxy ClientM)
 --   > getInt :<|> postInt = hoistClient api (flip runClientM cenv) (client api)
 --   >   where cenv = mkClientEnv manager baseurl
 hoistClient
-  :: HasClient ClientM api
+  :: (HasClient api, ClientConstraints api ClientM)
   => Proxy api
   -> (forall a. m a -> n a)
   -> Client m api
