@@ -1,12 +1,18 @@
-{-# LANGUAGE ConstraintKinds      #-}
-{-# LANGUAGE DataKinds            #-}
-{-# LANGUAGE FlexibleContexts     #-}
-{-# LANGUAGE KindSignatures       #-}
-{-# LANGUAGE RankNTypes           #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE TypeOperators        #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans  #-}
+{-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE DefaultSignatures     #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE InstanceSigs          #-}
+{-# LANGUAGE KindSignatures        #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TypeApplications      #-}
+{-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE UndecidableInstances  #-}
 -- | @since 0.14.1
 module Servant.Server.Generic (
     AsServerT,
@@ -16,8 +22,10 @@ module Servant.Server.Generic (
     genericServeTWithContext,
     genericServer,
     genericServerT,
+    GServer(..)
   ) where
 
+import           Data.Constraint (Dict(..))
 import           Data.Proxy
                  (Proxy (..))
 
@@ -97,3 +105,46 @@ genericServerT
     => routes (AsServerT m)
     -> ToServant routes (AsServerT m)
 genericServerT = toServant
+
+-- | Constraint synonym.
+type GServerConstraints api context m =
+  ( ToServant api (AsServerT m) ~ ServerT (ToServantApi api) m
+  , HasServer (ToServantApi api) context
+  , Generic (api (AsServerT m))
+  , GServantProduct (Rep (api (AsServerT m))))
+
+-- | This typeclass is used to expose necessary constraints in the implementation of @HasServer (GApi api)@.
+class GServer (api :: * -> *) context where
+  gServerDict :: forall m. Dict (GServerConstraints api context m)
+
+  default gServerDict
+    :: GServerConstraints api context m
+    => Dict (GServerConstraints api context m)
+  gServerDict = Dict
+
+instance (GServer api context) => HasServer (GApi api) context where
+  type ServerT (GApi api) m = api (AsServerT m)
+
+  route Proxy ctx delayed =
+    case gServerDict @api @context @Handler of
+      Dict -> route (Proxy @(ToServantApi api)) ctx (toServant <$> delayed)
+
+  hoistServerWithContext
+    :: forall m n.
+       Proxy (GApi api)
+    -> Proxy context
+    -> (forall x. m x -> n x)
+    -> ServerT (GApi api) m
+    -> ServerT (GApi api) n
+  hoistServerWithContext _ pctx nat server =
+    case (gServerDict @api @context @m, gServerDict @api @context @n) of
+      (Dict, Dict) ->
+        let
+          servantSrvM :: ServerT (ToServantApi api) m =
+            toServant server
+          servantSrvN :: ServerT (ToServantApi api) n =
+              hoistServerWithContext (Proxy @(ToServantApi api)) pctx nat servantSrvM
+        in
+          fromServant servantSrvN
+
+
