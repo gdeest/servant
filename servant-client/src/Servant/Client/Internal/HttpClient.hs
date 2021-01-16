@@ -130,7 +130,7 @@ hoistClient
   -> (forall a. m a -> n a)
   -> Client m api
   -> Client n api
-hoistClient = hoistClientMonad (Proxy :: Proxy ClientM)
+hoistClient = hoistClientMonad
 
 -- | @ClientM@ is the monad in which client functions run. Contains the
 -- 'Client.Manager' and 'BaseUrl' used for requests in the reader environment.
