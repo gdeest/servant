@@ -37,6 +37,8 @@ module Servant.API.Generic (
     ToServant,
     toServant,
     fromServant,
+    -- * API Combinator
+    GApi,
     -- * AsApi
     AsApi,
     ToServantApi,
@@ -107,6 +109,10 @@ fromServant
     :: GenericServant routes mode
     => ToServant routes mode -> routes mode
 fromServant = to . gfromServant
+
+-- | Servant combinator to embed an API defined by a generic product into a Servant API.
+-- This can be used to define nested APIs with records.
+data GApi (api :: * -> *)
 
 -- | A type that specifies that an API record contains an API definition. Only useful at type-level.
 data AsApi
