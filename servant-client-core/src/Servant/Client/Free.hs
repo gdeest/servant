@@ -14,5 +14,5 @@ import           Servant.Client.Core
 import           Servant.Client.Core.Reexport
 import           Servant.Client.Core.RunClient
 
-client :: HasClient (Free ClientF) api => Proxy api -> Client (Free ClientF) api
+client :: (HasClient api, ClientConstraints api (Free ClientF)) => Proxy api -> Client (Free ClientF) api
 client api = api `clientIn` (Proxy :: Proxy (Free ClientF))

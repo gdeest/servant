@@ -24,7 +24,8 @@ instance GenericMode (AsClientT m) where
 -- | Generate a record of client functions.
 genericClient
     :: forall routes m.
-       ( HasClient m (ToServantApi routes)
+       ( HasClient (ToServantApi routes)
+       , ClientConstraints (ToServantApi routes) m
        , GenericServant routes (AsClientT m)
        , Client m (ToServantApi routes) ~ ToServant routes (AsClientT m)
        )
@@ -36,7 +37,8 @@ genericClient
 -- | 'genericClient' but with 'hoistClientMonad' in between.
 genericClientHoist
     :: forall routes m n.
-       ( HasClient m (ToServantApi routes)
+       ( HasClient (ToServantApi routes)
+       , ClientConstraints (ToServantApi routes) m
        , GenericServant routes (AsClientT n)
        , Client n (ToServantApi routes) ~ ToServant routes (AsClientT n)
        )
@@ -44,7 +46,7 @@ genericClientHoist
     -> routes (AsClientT n)
 genericClientHoist nt
     = fromServant
-    $ hoistClientMonad m api nt
+    $ hoistClientMonad api nt
     $ clientIn api m
   where
     m = Proxy :: Proxy m

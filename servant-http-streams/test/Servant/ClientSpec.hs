@@ -401,7 +401,7 @@ failSpec = beforeAll (startWaiApp failServer) $ afterAll endWaiApp $ do
 
 data WrappedApi where
   WrappedApi :: (HasServer (api :: *) '[], Server api ~ Handler a,
-                 HasClient ClientM api, Client ClientM api ~ ClientM ()) =>
+                 HasClient api, ClientConstraints api ClientM, Client ClientM api ~ ClientM ()) =>
     Proxy api -> WrappedApi
 
 basicAuthSpec :: Spec
