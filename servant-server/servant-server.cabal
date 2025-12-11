@@ -101,6 +101,7 @@ library
     Servant.Server.Internal.DelayedIO
     Servant.Server.Internal.ErrorFormatter
     Servant.Server.Internal.Handler
+    Servant.Server.Internal.NewVerbRouter
     Servant.Server.Internal.ResponseRender
     Servant.Server.Internal.RouteResult
     Servant.Server.Internal.Router

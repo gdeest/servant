@@ -130,6 +130,11 @@ import Servant.API.Modifiers
   , RequestArgument
   , unfoldRequestArgument
   )
+import Servant.API.Experimental.Verb
+  ( ClassifyResponse
+  , HandlerReturn
+  , NewVerb
+  )
 import Servant.API.MultiVerb
 import Servant.API.QueryString (FromDeepQuery (..))
 import Servant.API.ResponseHeaders
@@ -152,6 +157,7 @@ import Web.HttpApiData
 
 import Servant.Server.Internal.BasicAuth
 import Servant.Server.Internal.Context
+import Servant.Server.Internal.NewVerbRouter (VerbRouter (..))
 import Servant.Server.Internal.Delayed
 import Servant.Server.Internal.DelayedIO
 import Servant.Server.Internal.ErrorFormatter
@@ -1424,3 +1430,28 @@ instance AllMime cs => HasAcceptCheck cs where
 
 instance HasAcceptCheck '() where
   acceptCheck' _ _ = pure ()
+
+-- | 'HasServer' instance for the unified 'NewVerb' type.
+--
+-- This instance dispatches to 'VerbRouter' based on the response classification.
+instance
+  ( ReflectMethod method
+  , VerbRouter (ClassifyResponse a) a
+  )
+  => HasServer (NewVerb method a) ctx
+  where
+  type ServerT (NewVerb method a) m = m (HandlerReturn a)
+
+  hoistServerWithContext _ _ f = f
+
+  route
+    :: forall env
+     . Proxy (NewVerb method a)
+    -> Context ctx
+    -> Delayed env (Handler (HandlerReturn a))
+    -> Router env
+  route _ _ =
+    routeVerb
+      (Proxy @(ClassifyResponse a))
+      (Proxy @a)
+      (reflectMethod (Proxy @method))

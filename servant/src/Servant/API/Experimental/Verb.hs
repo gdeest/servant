@@ -64,7 +64,9 @@ module Servant.API.Experimental.Verb
   , IsSuccess
   , SuccessContentTypes
   , AllContentTypes
-  , ResponseTypes
+    -- ** Re-exported from MultiVerb
+  , MV.ResponseType
+  , MV.ResponseTypes
 
     -- * Response Classification
   , ResponseKind (..)
@@ -107,6 +109,7 @@ import GHC.Generics (Generic)
 import GHC.TypeLits (ErrorMessage (..), Nat, TypeError, type (<=?))
 import Network.HTTP.Types.Method (StdMethod (..))
 
+import qualified Servant.API.MultiVerb as MV
 import Servant.API.UVerb.Union (Union)
 
 --------------------------------------------------------------------------------
@@ -186,8 +189,8 @@ type OneOf' (rs :: [Type]) = OneOf rs (DefaultResult rs)
 -- - Two responses: @Either@
 -- - Otherwise: @Union@ of response types
 type family DefaultResult (rs :: [Type]) :: Type where
-  DefaultResult '[r1, r2] = Either (ResponseType r1) (ResponseType r2)
-  DefaultResult rs = Union (ResponseTypes rs)
+  DefaultResult '[r1, r2] = Either (MV.ResponseType r1) (MV.ResponseType r2)
+  DefaultResult rs = Union (MV.ResponseTypes rs)
 
 --------------------------------------------------------------------------------
 -- Type Families for Response Introspection
@@ -213,20 +216,11 @@ type family ContentTypesOf (a :: Type) :: [Type] where
       ( 'Text "Cannot determine content types of " ':<>: 'ShowType a
       )
 
--- | Extract the body type from a response descriptor.
-type family ResponseType (a :: Type) :: Type where
-  ResponseType (Responds s cts a) = a
-  ResponseType (RespondsEmpty s) = ()
-  ResponseType a =
-    TypeError
-      ( 'Text "Cannot determine response type of " ':<>: 'ShowType a ':$$:
-        'Text "Use Responds or RespondsEmpty"
-      )
+-- | Type instance for 'Responds' to integrate with MultiVerb's 'ResponseType'.
+type instance MV.ResponseType (Responds s cts a) = a
 
--- | Map 'ResponseType' over a list of response descriptors.
-type family ResponseTypes (rs :: [Type]) :: [Type] where
-  ResponseTypes '[] = '[]
-  ResponseTypes (r ': rs) = ResponseType r ': ResponseTypes rs
+-- | Type instance for 'RespondsEmpty' to integrate with MultiVerb's 'ResponseType'.
+type instance MV.ResponseType (RespondsEmpty s) = ()
 
 -- | Compute handler return type from a response specification.
 --
