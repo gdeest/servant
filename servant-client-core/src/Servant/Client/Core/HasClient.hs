@@ -140,6 +140,12 @@ import Servant.Client.Core.Auth
 import Servant.Client.Core.BasicAuth
 import Servant.Client.Core.ClientError
 import Servant.Client.Core.MultiVerb.ResponseUnrender
+  ( RequestMode (..)
+  , ResponseListUnrender (..)
+  , ResponseRequestMode
+  , SomeClientResponse (..)
+  , fromSomeClientResponse
+  )
 import Servant.Client.Core.Request
 import Servant.Client.Core.Response
 import qualified Servant.Client.Core.Response as Response
@@ -1226,31 +1232,45 @@ x // f = f x
 (/:) :: (a -> b -> c) -> b -> a -> c
 (/:) = flip
 
-instance
-  ( AllMime cs
-  , AsUnion as r
-  , ReflectMethod method
-  , ResponseListUnrender cs as
-  , RunClient m
-  )
-  => HasClient m (MultiVerb method cs as r)
-  where
-  type Client m (MultiVerb method cs as r) = m r
+-- | Class to dispatch MultiVerb requests based on whether streaming is required.
+--
+-- For buffered requests (no streaming responses), we use 'runRequestAcceptStatus'.
+-- For streaming requests, we use 'withStreamingRequest' to keep the connection
+-- open while the stream is consumed.
+class RunMultiVerbClient m (mode :: RequestMode) where
+  runMultiVerbRequest
+    :: forall cs as r
+     . ( AllMime cs
+       , AsUnion as r
+       , ResponseListUnrender cs as
+       )
+    => Proxy mode
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> m r
 
-  clientWithRoute _ _ req = do
+-- | Buffered instance: uses runRequestAcceptStatus (existing behavior).
+instance RunClient m => RunMultiVerbClient m 'Buffered where
+  runMultiVerbRequest
+    :: forall cs as r
+     . ( AllMime cs
+       , AsUnion as r
+       , ResponseListUnrender cs as
+       )
+    => Proxy 'Buffered
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> m r
+  runMultiVerbRequest _ _ _ req = do
     response@Response{responseBody = body} <-
       runRequestAcceptStatus
         (Just (responseListStatuses @cs @as))
         req
-          { requestMethod = method
-          , requestAccept = Seq.fromList accept
-          }
-
     c <- getResponseContentType response
-    unless (any (M.matches c) accept) $ do
+    unless (any (M.matches c) (allMime (Proxy @cs))) $ do
       throwClientError $ UnsupportedContentType c response
-
-    -- NOTE: support streaming in the future
     let sresp =
           if BSL.null body
             then SomeClientResponse $ response{Response.responseBody = ()}
@@ -1259,9 +1279,63 @@ instance
       StatusMismatch -> throwClientError (DecodeFailure "Status mismatch" response)
       UnrenderError e -> throwClientError (DecodeFailure (Text.pack e) response)
       UnrenderSuccess x -> pure (fromUnion @as x)
-    where
-      accept = allMime (Proxy @cs)
-      method = reflectMethod (Proxy @method)
+
+-- | Streaming instance: uses withStreamingRequest to keep the connection open.
+-- All processing happens inside the callback so the stream can be consumed.
+instance RunStreamingClient m => RunMultiVerbClient m 'Streaming where
+  runMultiVerbRequest
+    :: forall cs as r
+     . ( AllMime cs
+       , AsUnion as r
+       , ResponseListUnrender cs as
+       )
+    => Proxy 'Streaming
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> m r
+  runMultiVerbRequest _ _ _ req =
+    withStreamingRequest req $ \response -> do
+      let c = getStreamingResponseContentType response
+      unless (any (M.matches c) (allMime (Proxy @cs))) $ do
+        -- We're in IO here, so use fail to signal error (will become ClientError)
+        fail $ "Unsupported content type: " ++ show c
+      let sresp = SomeClientResponse response
+      case responseListUnrender @cs @as c sresp of
+        StatusMismatch -> fail "Status mismatch"
+        UnrenderError e -> fail e
+        UnrenderSuccess x -> pure (fromUnion @as x)
+
+-- | Extract content type from a streaming response (pure, in IO)
+getStreamingResponseContentType :: StreamingResponse -> M.MediaType
+getStreamingResponseContentType response =
+  case lookup "Content-Type" (toList (responseHeaders response)) of
+    Nothing -> "application" M.// "octet-stream"
+    Just t -> case M.parseAccept t of
+      Nothing -> "application" M.// "octet-stream"
+      Just t' -> t'
+
+instance
+  ( AllMime cs
+  , AsUnion as r
+  , ReflectMethod method
+  , ResponseListUnrender cs as
+  , RunClient m
+  , RunMultiVerbClient m (ResponseRequestMode as)
+  )
+  => HasClient m (MultiVerb method cs as r)
+  where
+  type Client m (MultiVerb method cs as r) = m r
+
+  clientWithRoute _ _ req =
+    runMultiVerbRequest
+      (Proxy @(ResponseRequestMode as))
+      (Proxy @cs)
+      (Proxy @as)
+      req
+        { requestMethod = reflectMethod (Proxy @method)
+        , requestAccept = Seq.fromList (allMime (Proxy @cs))
+        }
 
   hoistClientMonad _ _ f = f
 

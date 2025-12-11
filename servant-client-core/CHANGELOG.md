@@ -6,6 +6,12 @@ Package versions follow the [Package Versioning Policy](https://pvp.haskell.org/
 0.20.3.0
 --------
 
+- Add streaming support to MultiVerb client
+
+  MultiVerb now properly supports streaming responses. When a response list
+  contains `RespondStreaming` or `RespondStream`, the client uses
+  `withStreamingRequest` to keep the connection alive during streaming.
+
 - Server-sent events (SSE) for client-side [#1811](https://github.com/haskell-servant/servant/issues/1811)
 
   Implement Server-sent events (SSE) for the Servant client using a new

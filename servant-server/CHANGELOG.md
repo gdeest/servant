@@ -16,6 +16,11 @@ Package versions follow the [Package Versioning Policy](https://pvp.haskell.org/
 
 ### Other changes
 
+- Add `ResponseRender` instance for `RespondStream`
+
+  Enables server-side rendering of streaming responses with typed chunks
+  in MultiVerb endpoints.
+
 - Server-sent events (SSE) for client-side [#1811](https://github.com/haskell-servant/servant/issues/1811)
 
   Implement Server-sent events (SSE) for the Servant client using a new

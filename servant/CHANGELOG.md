@@ -15,6 +15,13 @@ Package versions follow the [Package Versioning Policy](https://pvp.haskell.org/
 
 ### Other changes
 
+- Add `RespondStream` for typed streaming in MultiVerb
+
+  `RespondStream` enables streaming responses in MultiVerb endpoints
+  with automatic framing. Unlike `RespondStreaming` (which expects pre-framed
+  `SourceIO ByteString`), this type accepts typed chunks and applies framing
+  during response rendering.
+
 - Server-sent events (SSE) for client-side [#1811](https://github.com/haskell-servant/servant/issues/1811)
 
   Implement Server-sent events (SSE) for the Servant client using a new

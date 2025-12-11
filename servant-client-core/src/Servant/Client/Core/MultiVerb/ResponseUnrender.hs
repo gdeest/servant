@@ -1,6 +1,17 @@
 {-# LANGUAGE ApplicativeDo #-}
 
-module Servant.Client.Core.MultiVerb.ResponseUnrender where
+module Servant.Client.Core.MultiVerb.ResponseUnrender
+  ( -- * Response unrendering
+    ResponseUnrender (..)
+  , ResponseListUnrender (..)
+  , SomeClientResponse (..)
+  , fromSomeClientResponse
+
+    -- * Request mode detection
+  , RequestMode (..)
+  , ResponseRequestMode
+  )
+where
 
 import Control.Applicative
 import Control.Monad
@@ -15,7 +26,7 @@ import Network.HTTP.Types.Status (Status)
 import Servant.API.ContentTypes
 import Servant.API.MultiVerb
 import Servant.API.Status
-import Servant.API.Stream (SourceIO)
+import Servant.API.Stream (FramingUnrender (..), SourceIO)
 import Servant.API.UVerb.Union (Union)
 
 import Servant.Client.Core.Response (ResponseF (..))
@@ -132,3 +143,30 @@ instance
     case extractHeaders @hs (responseHeaders output) of
       Nothing -> UnrenderError "Failed to parse headers"
       Just hs -> pure $ fromHeaders @xs (hs, x)
+
+instance
+  ( FramingUnrender framing
+  , KnownStatus s
+  , MimeUnrender ct chunk
+  )
+  => ResponseUnrender cs (RespondStream s desc framing ct chunk)
+  where
+  type ResponseStatus (RespondStream s desc framing ct chunk) = s
+  type ResponseBody (RespondStream s desc framing ct chunk) = SourceIO ByteString
+
+  responseUnrender _ resp = do
+    guard (Response.responseStatusCode resp == statusVal (Proxy @s))
+    pure $ framingUnrender (Proxy @framing) (mimeUnrender (Proxy @ct)) (Response.responseBody resp)
+
+-- | Request mode for MultiVerb client dispatch.
+-- Determines whether to use buffered or streaming requests.
+data RequestMode = Buffered | Streaming
+
+-- | Detect if any response in the list requires streaming.
+-- If so, the client must use 'withStreamingRequest' to keep the connection
+-- open while consuming the stream.
+type family ResponseRequestMode (as :: [Type]) :: RequestMode where
+  ResponseRequestMode '[] = 'Buffered
+  ResponseRequestMode (RespondStreaming _ _ _ _ ': _) = 'Streaming
+  ResponseRequestMode (RespondStream _ _ _ _ _ ': _) = 'Streaming
+  ResponseRequestMode (_ ': as) = ResponseRequestMode as
