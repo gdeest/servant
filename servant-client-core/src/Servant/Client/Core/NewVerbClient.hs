@@ -1,7 +1,9 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -18,6 +20,7 @@
 module Servant.Client.Core.NewVerbClient
   ( -- * Client Class
     VerbClient (..)
+  , VerbClientConstraint
 
     -- * Response Unrendering
   , NewVerbResponseUnrender (..)
@@ -38,11 +41,15 @@ import GHC.TypeLits (Nat)
 import qualified Network.HTTP.Media as M
 import Network.HTTP.Types (Method, Status)
 
+import Data.Constraint (Constraint)
 import Servant.API.ContentTypes
   ( AllMime (..)
   , AllMimeUnrender (..)
+  , MimeUnrender (..)
+  , contentType
   )
 import Servant.API.Experimental.Verb
+import Servant.API.Stream (FramingUnrender (..), FromSourceIO (..))
 import Servant.API.MultiVerb
   ( AsUnion (..)
   , UnrenderResult (..)
@@ -57,20 +64,31 @@ import Servant.Client.Core.MultiVerb.ResponseUnrender
 import Servant.Client.Core.Request (Request, requestAccept, requestMethod)
 import Servant.Client.Core.Response (Response, ResponseF (..))
 import qualified Servant.Client.Core.Response as Response
-import Servant.Client.Core.RunClient (RunClient (..))
+import Servant.Client.Core.RunClient (RunClient (..), RunStreamingClient (..))
 
 --------------------------------------------------------------------------------
 -- Client Class
 --------------------------------------------------------------------------------
+
+-- | Constraint required for a given response kind.
+--
+-- * Non-streaming responses require 'RunClient'
+-- * Streaming responses require 'RunStreamingClient'
+type family VerbClientConstraint (kind :: ResponseKind) (m :: Type -> Type) :: Constraint where
+  VerbClientConstraint 'StreamingResponse m = RunStreamingClient m
+  VerbClientConstraint _ m = RunClient m
 
 -- | Dispatch client generation based on response classification.
 --
 -- This class enables a single 'HasClient' instance for 'NewVerb' that
 -- dispatches to different implementations based on the structure of the
 -- response type.
+--
+-- The constraint varies by response kind: streaming responses require
+-- 'RunStreamingClient', while others require 'RunClient'.
 class VerbClient (kind :: ResponseKind) (a :: Type) where
   clientVerb
-    :: RunClient m
+    :: VerbClientConstraint kind m
     => Proxy kind
     -> Proxy a
     -> Method
@@ -156,6 +174,29 @@ instance
       UnrenderSuccess x -> pure (fromUnion @rs x)
     where
       accept = allMime (Proxy @(SuccessContentTypes rs))
+
+--------------------------------------------------------------------------------
+-- Streaming Response Instance
+--------------------------------------------------------------------------------
+
+instance
+  ( FramingUnrender framing
+  , FromSourceIO chunk (SourceIO chunk)
+  , MimeUnrender ct chunk
+  )
+  => VerbClient 'StreamingResponse (RespondsStream s framing ct chunk)
+  where
+  clientVerb _ _ method req =
+    withStreamingRequest req' $ \Response{responseBody = body} -> do
+      let mimeUnrender' = mimeUnrender (Proxy @ct)
+          framingUnrender' = framingUnrender (Proxy @framing) mimeUnrender'
+      fromSourceIO @chunk @(SourceIO chunk) $ framingUnrender' body
+    where
+      req' =
+        req
+          { requestAccept = Seq.fromList [contentType (Proxy @ct)]
+          , requestMethod = method
+          }
 
 --------------------------------------------------------------------------------
 -- Response Unrendering

@@ -29,13 +29,15 @@ module Servant.Server.Internal.NewVerbRouter
   , NewVerbResponseListRender (..)
   ) where
 
+import qualified Data.ByteString.Builder as BB
+import Control.Monad (when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BSL
 import Data.Kind (Type)
+import Data.Maybe (fromMaybe, isNothing, maybeToList)
 import Data.Proxy (Proxy (..))
 import Data.SOP (I (..), NS (..))
 import qualified Network.HTTP.Media as M
-import Data.Maybe (fromMaybe)
 import Network.HTTP.Types
   ( HeaderName
   , Method
@@ -46,13 +48,18 @@ import Network.HTTP.Types
   , methodHead
   , statusIsSuccessful
   )
+import Network.Wai (responseStream)
 import qualified Network.Wai as Wai
 
 import Servant.API.ContentTypes
   ( AcceptHeader (..)
   , AllMime (..)
   , AllMimeRender (..)
+  , MimeRender (..)
+  , contentType
   )
+import Servant.API.Stream (FramingRender (..), ToSourceIO (..))
+import qualified Servant.Types.SourceT as S
 import Servant.API.Experimental.Verb
 import Servant.API.MultiVerb (AsUnion (..))
 import Servant.API.Status (KnownStatus, statusVal)
@@ -193,6 +200,52 @@ instance
                  in Route $ Wai.responseLBS respStatus headers bdy
 
 --------------------------------------------------------------------------------
+-- Streaming Response Instance
+--------------------------------------------------------------------------------
+
+instance
+  ( FramingRender framing
+  , MimeRender ct chunk
+  , ToSourceIO chunk (SourceIO chunk)
+  , KnownStatus s
+  )
+  => VerbRouter 'StreamingResponse (RespondsStream s framing ct chunk)
+  where
+  routeVerb _ _ method action = leafRouter route'
+    where
+      status = statusVal (Proxy @s)
+
+      route' env request respond =
+        let AcceptHeader accH = getAcceptHeader request
+            cmediatype = M.matchAccept [contentType (Proxy @ct)] accH
+            accCheck = when (isNothing cmediatype) $ delayedFail err406
+            contentHeader = (hContentType, M.renderHeader . maybeToList $ cmediatype)
+         in runAction
+              ( action
+                  `addMethodCheck` methodCheck method request
+                  `addAcceptCheck` accCheck
+              )
+              env
+              request
+              respond
+              $ \sourceT -> do
+                let S.SourceT kStepLBS =
+                      framingRender
+                        (Proxy @framing)
+                        (mimeRender (Proxy @ct) :: chunk -> BSL.ByteString)
+                        (toSourceIO sourceT)
+                 in Route $ responseStream status [contentHeader] $ \write flush -> do
+                      let loop S.Stop = flush
+                          loop (S.Error err) = fail err
+                          loop (S.Skip s) = loop s
+                          loop (S.Effect ms) = ms >>= loop
+                          loop (S.Yield lbs s) = do
+                            write (BB.lazyByteString lbs)
+                            flush
+                            loop s
+                      kStepLBS loop
+
+--------------------------------------------------------------------------------
 -- Response Rendering
 --------------------------------------------------------------------------------
 
@@ -249,6 +302,13 @@ instance
   where
   renderResponse _ () =
     Just (statusVal (Proxy @s), [], "")
+
+-- Note: RespondsStream cannot be rendered via NewVerbResponseRender because
+-- streaming requires special handling (responseStream instead of responseLBS).
+-- When RespondsStream is used within OneOf, the multi-response router needs
+-- to detect the streaming case and use different rendering logic.
+-- For now, we provide a placeholder that will need to be enhanced for full
+-- OneOf + streaming support.
 
 -- | Render a response from a union of response types.
 class NewVerbResponseListRender (rs :: [Type]) where

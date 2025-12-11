@@ -50,6 +50,7 @@ module Servant.API.Experimental.Verb
     -- * Response Descriptors
   , Responds
   , RespondsEmpty
+  , RespondsStream
   , Respond
 
     -- * Multi-Response
@@ -100,6 +101,14 @@ module Servant.API.Experimental.Verb
   , PutNoContent'
   , DeleteNoContent'
   , PatchNoContent'
+    -- ** Streaming (200 OK)
+  , StreamGet'
+  , StreamPost'
+  , StreamPut'
+  , StreamDelete'
+  , StreamPatch'
+    -- ** Re-exported for streaming
+  , SourceIO
   ) where
 
 import Data.Kind (Type)
@@ -110,6 +119,7 @@ import GHC.TypeLits (ErrorMessage (..), Nat, TypeError, type (<=?))
 import Network.HTTP.Types.Method (StdMethod (..))
 
 import qualified Servant.API.MultiVerb as MV
+import Servant.API.Stream (SourceIO)
 import Servant.API.UVerb.Union (Union)
 
 --------------------------------------------------------------------------------
@@ -159,6 +169,25 @@ data RespondsEmpty (status :: Nat)
 -- @
 type Respond (status :: Nat) (ct :: Type) (a :: Type) = Responds status '[ct] a
 
+-- | Streaming response with status, framing strategy, content type, and chunk type.
+--
+-- Unlike 'Responds', streaming responses use a single content type (no negotiation)
+-- because the framing format is tightly coupled to the encoding.
+--
+-- Can be used standalone or within 'OneOf' to provide error responses:
+--
+-- @
+-- -- Standalone streaming
+-- type EventStream = NewVerb 'GET (RespondsStream 200 NewlineFraming JSON Event)
+--
+-- -- Streaming with error handling
+-- type EventsApi = NewVerb 'GET (OneOf
+--     '[ RespondsStream 200 NewlineFraming JSON Event
+--      , Responds 404 '[JSON] NotFoundError
+--      ] (Either NotFoundError (SourceIO Event)))
+-- @
+data RespondsStream (status :: Nat) (framing :: Type) (ct :: Type) (chunk :: Type)
+
 --------------------------------------------------------------------------------
 -- Multi-Response
 --------------------------------------------------------------------------------
@@ -200,16 +229,18 @@ type family DefaultResult (rs :: [Type]) :: Type where
 type family StatusOf (a :: Type) :: Nat where
   StatusOf (Responds s cts a) = s
   StatusOf (RespondsEmpty s) = s
+  StatusOf (RespondsStream s framing ct chunk) = s
   StatusOf a =
     TypeError
       ( 'Text "Cannot determine status of " ':<>: 'ShowType a ':$$:
-        'Text "Use Responds or RespondsEmpty to specify status"
+        'Text "Use Responds, RespondsEmpty, or RespondsStream to specify status"
       )
 
 -- | Extract content types from a response type.
 type family ContentTypesOf (a :: Type) :: [Type] where
   ContentTypesOf (Responds s cts a) = cts
   ContentTypesOf (RespondsEmpty s) = '[]
+  ContentTypesOf (RespondsStream s framing ct chunk) = '[ct]
   ContentTypesOf (OneOf rs r) = AllContentTypes rs
   ContentTypesOf a =
     TypeError
@@ -222,14 +253,19 @@ type instance MV.ResponseType (Responds s cts a) = a
 -- | Type instance for 'RespondsEmpty' to integrate with MultiVerb's 'ResponseType'.
 type instance MV.ResponseType (RespondsEmpty s) = ()
 
+-- | Type instance for 'RespondsStream' to integrate with MultiVerb's 'ResponseType'.
+type instance MV.ResponseType (RespondsStream s framing ct chunk) = SourceIO chunk
+
 -- | Compute handler return type from a response specification.
 --
 -- - 'Responds': Returns the body type
 -- - 'RespondsEmpty': Returns ()
+-- - 'RespondsStream': Returns @SourceIO chunk@
 -- - 'OneOf': Returns the result type
 type family HandlerReturn (a :: Type) :: Type where
   HandlerReturn (Responds s cts a) = a
   HandlerReturn (RespondsEmpty s) = ()
+  HandlerReturn (RespondsStream s framing ct chunk) = SourceIO chunk
   HandlerReturn (OneOf rs result) = result
   HandlerReturn a =
     TypeError
@@ -253,6 +289,11 @@ type family SuccessContentTypes (rs :: [Type]) :: [Type] where
       (SuccessContentTypes rest)
   SuccessContentTypes (RespondsEmpty s ': rest) =
     SuccessContentTypes rest -- No body, no content type
+  SuccessContentTypes (RespondsStream s framing ct chunk ': rest) =
+    If
+      (IsSuccess s)
+      (UnionTypes '[ct] (SuccessContentTypes rest))
+      (SuccessContentTypes rest)
 
 -- | Collect all content types from all responses (for documentation).
 type family AllContentTypes (rs :: [Type]) :: [Type] where
@@ -261,6 +302,8 @@ type family AllContentTypes (rs :: [Type]) :: [Type] where
     UnionTypes cts (AllContentTypes rest)
   AllContentTypes (RespondsEmpty s ': rest) =
     AllContentTypes rest
+  AllContentTypes (RespondsStream s framing ct chunk ': rest) =
+    UnionTypes '[ct] (AllContentTypes rest)
 
 -- | Union of two type-level lists (removes duplicates).
 type family UnionTypes (xs :: [Type]) (ys :: [Type]) :: [Type] where
@@ -289,16 +332,19 @@ data ResponseKind
     EmptyResponse
   | -- | Multiple possible responses: @OneOf rs result@
     MultiResponse
+  | -- | Streaming response: @RespondsStream s framing ct chunk@
+    StreamingResponse
 
 -- | Classify a response type for instance dispatch.
 type family ClassifyResponse (a :: Type) :: ResponseKind where
   ClassifyResponse (OneOf rs r) = 'MultiResponse
   ClassifyResponse (RespondsEmpty s) = 'EmptyResponse
   ClassifyResponse (Responds s cts a) = 'SingleResponse
+  ClassifyResponse (RespondsStream s framing ct chunk) = 'StreamingResponse
   ClassifyResponse a =
     TypeError
       ( 'Text "Unknown response type: " ':<>: 'ShowType a ':$$:
-        'Text "Use Responds, RespondsEmpty, or OneOf"
+        'Text "Use Responds, RespondsEmpty, RespondsStream, or OneOf"
       )
 
 --------------------------------------------------------------------------------
@@ -380,3 +426,24 @@ type DeleteNoContent' = NewVerb 'DELETE (RespondsEmpty 204)
 
 -- | PATCH with 204 No Content
 type PatchNoContent' = NewVerb 'PATCH (RespondsEmpty 204)
+
+--------------------------------------------------------------------------------
+-- Streaming Type Synonyms
+--------------------------------------------------------------------------------
+
+-- ** Basic Streaming
+
+-- | Streaming GET with 200 OK
+type StreamGet' framing ct chunk = NewVerb 'GET (RespondsStream 200 framing ct chunk)
+
+-- | Streaming POST with 200 OK
+type StreamPost' framing ct chunk = NewVerb 'POST (RespondsStream 200 framing ct chunk)
+
+-- | Streaming PUT with 200 OK
+type StreamPut' framing ct chunk = NewVerb 'PUT (RespondsStream 200 framing ct chunk)
+
+-- | Streaming DELETE with 200 OK
+type StreamDelete' framing ct chunk = NewVerb 'DELETE (RespondsStream 200 framing ct chunk)
+
+-- | Streaming PATCH with 200 OK
+type StreamPatch' framing ct chunk = NewVerb 'PATCH (RespondsStream 200 framing ct chunk)

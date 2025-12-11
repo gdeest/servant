@@ -15,7 +15,9 @@
 module Servant.Server.NewVerbSpec (spec) where
 
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON, ToJSON, decode')
+import Data.Aeson (FromJSON, ToJSON, decode', eitherDecode')
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.Char8 as BSL8
 import Data.Proxy (Proxy (..))
 import Data.SOP (I (..), NS (..))
 import GHC.Generics (Generic)
@@ -40,6 +42,7 @@ import qualified Test.Hspec.Wai as THW
 
 import Servant.API
   ( JSON
+  , NewlineFraming
   , PlainText
   , StdMethod (..)
   , (:<|>) (..)
@@ -55,9 +58,11 @@ import Servant.API.Experimental.Verb
   , Put'
   , Responds
   , RespondsEmpty
+  , StreamGet'
   )
 import Servant.API.MultiVerb (AsUnion (..))
 import Servant.Server (Server, serve)
+import Servant.Types.SourceT (source)
 
 --------------------------------------------------------------------------------
 -- Test Types
@@ -162,6 +167,21 @@ contentNegotiationServer :: Server ContentNegotiationApi
 contentNegotiationServer = pure "Hello"
 
 --------------------------------------------------------------------------------
+-- Streaming Response Tests
+--------------------------------------------------------------------------------
+
+-- Standalone streaming endpoint
+type StreamingApi =
+  "stream" :> StreamGet' NewlineFraming JSON Person
+
+streamingServer :: Server StreamingApi
+streamingServer = pure $ source [alice, bob, alice]
+
+-- Parse newline-delimited JSON response
+parseJsonLines :: FromJSON a => BSL.ByteString -> [Either String a]
+parseJsonLines = map eitherDecode' . filter (not . BSL.null) . BSL8.split '\n'
+
+--------------------------------------------------------------------------------
 -- Spec
 --------------------------------------------------------------------------------
 
@@ -171,6 +191,7 @@ spec = describe "Servant.API.Experimental.Verb (NewVerb)" $ do
   emptyResponseSpec
   multiResponseSpec
   contentNegotiationSpec
+  streamingSpec
   methodSpec
 
 singleResponseSpec :: Spec
@@ -270,6 +291,24 @@ contentNegotiationSpec = describe "Content Negotiation" $ do
 
     it "returns 406 for unsupported Accept header" $ do
       response <- THW.request methodGet "/multi-content" [(hAccept, "text/html")] ""
+      liftIO $ statusCode (simpleStatus response) `shouldBe` 406
+
+streamingSpec :: Spec
+streamingSpec = describe "Streaming Response (RespondsStream)" $ do
+  with (pure $ serve (Proxy @StreamingApi) streamingServer) $ do
+    it "streams JSON Lines with 200" $ do
+      response <- THW.request methodGet "/stream" [(hAccept, "application/json")] ""
+      liftIO $ statusCode (simpleStatus response) `shouldBe` 200
+      liftIO $ parseJsonLines (simpleBody response) `shouldBe` [Right alice, Right bob, Right alice]
+
+    it "sets Content-Type header correctly" $ do
+      response <- THW.request methodGet "/stream" [(hAccept, "application/json")] ""
+      liftIO $
+        lookup "Content-Type" (simpleHeaders response)
+          `shouldBe` Just "application/json;charset=utf-8"
+
+    it "returns 406 for unsupported Accept header" $ do
+      response <- THW.request methodGet "/stream" [(hAccept, "text/html")] ""
       liftIO $ statusCode (simpleStatus response) `shouldBe` 406
 
 methodSpec :: Spec

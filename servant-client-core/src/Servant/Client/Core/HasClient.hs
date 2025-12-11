@@ -145,7 +145,7 @@ import Servant.Client.Core.Auth
 import Servant.Client.Core.BasicAuth
 import Servant.Client.Core.ClientError
 import Servant.Client.Core.MultiVerb.ResponseUnrender
-import Servant.Client.Core.NewVerbClient (VerbClient (..))
+import Servant.Client.Core.NewVerbClient (VerbClient (..), VerbClientConstraint)
 import Servant.Client.Core.Request
 import Servant.Client.Core.Response
 import qualified Servant.Client.Core.Response as Response
@@ -1329,7 +1329,8 @@ decodedAs response@Response{responseBody = body} ct = do
 -------------------------------------------------------------------------------
 
 instance
-  ( RunClient m
+  ( RunClient m  -- Required by HasClient superclass
+  , VerbClientConstraint (ClassifyResponse a) m
   , ReflectMethod method
   , VerbClient (ClassifyResponse a) a
   )
