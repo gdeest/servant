@@ -297,10 +297,12 @@ verbSpec = describe "Servant.API.Verb" $ do
               simpleHeaders response
                 `shouldContain` [("Content-Type", "application/json;charset=utf-8")]
 
-          it "works for Stream as for Result" $ do
-            response <- THW.request method "/stream" [] ""
-            liftIO $ statusCode (simpleStatus response) `shouldBe` status
-            liftIO $ simpleBody response `shouldBe` "bytestring"
+          -- HEAD should not return body per HTTP spec
+          unless (method == methodHead) $
+            it "works for Stream as for Result" $ do
+              response <- THW.request method "/stream" [] ""
+              liftIO $ statusCode (simpleStatus response) `shouldBe` status
+              liftIO $ simpleBody response `shouldBe` "bytestring"
 
   test "GET 200" get200 methodGet 200
   test "POST 210" post210 methodPost 210

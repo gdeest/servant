@@ -19,10 +19,9 @@ import Servant.API.ContentTypes
   ( Accept
   , AcceptHeader (..)
   , AllMimeRender
-  , MimeRender
+  , MimeRender (..)
   , allMimeRender
   , contentType
-  , mimeRender
   )
 import Servant.API.MultiVerb
 import Servant.API.ResponseHeaders (GetHeaders (..), Headers, getResponse)

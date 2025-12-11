@@ -16,19 +16,18 @@ module Servant.Server.Internal
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (join, unless, void, when)
+import Control.Monad (join, unless, void)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Resource (ReleaseKey, runResourceT)
 import Data.Acquire
 import Data.Bifunctor (first)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Char8 as BC8
 import qualified Data.ByteString.Lazy as BSL
 import Data.Constraint (Constraint, Dict (..))
 import Data.Either (partitionEithers)
 import Data.Kind (Type)
-import Data.Maybe (fromMaybe, isNothing, mapMaybe, maybeToList)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.String (IsString (..))
 import Data.Tagged (Tagged (..), retag, untag)
 import qualified Data.Text as T
@@ -36,12 +35,10 @@ import Data.Typeable
 import GHC.Generics
 import GHC.TypeLits
   ( ErrorMessage (..)
-  , KnownNat
   , KnownSymbol
   , TypeError
   , symbolVal
   )
-import qualified Network.HTTP.Media as NHM
 import Network.HTTP.Types hiding (Header, ResponseHeaders, statusCode)
 import Network.Socket (SockAddr)
 import Network.Wai
@@ -60,12 +57,10 @@ import Network.Wai
   , requestHeaderHost
   , requestHeaders
   , requestMethod
-  , responseStream
   , vault
   )
 import Servant.API
-  ( Accept (..)
-  , BasicAuth
+  ( BasicAuth
   , Capture'
   , CaptureAll
   , DeepQuery
@@ -132,13 +127,8 @@ import Servant.API.Modifiers
   )
 import Servant.API.MultiVerb
 import Servant.API.QueryString (FromDeepQuery (..))
-import Servant.API.ResponseHeaders
-  ( GetHeaders
-  , Headers
-  , getHeaders
-  , getResponse
-  )
-import Servant.API.Status (KnownStatus, statusFromNat)
+import Servant.API.ResponseHeaders (GetHeaders, Headers)
+import Servant.API.Status (KnownStatus)
 import Servant.API.TypeErrors
 import Servant.API.TypeLevel (AtMostOneFragment, FragmentUnique)
 import qualified Servant.Types.SourceT as S
@@ -412,7 +402,7 @@ instance
 instance
   {-# OVERLAPPABLE #-}
   ( FramingRender framing
-  , KnownNat status
+  , KnownStatus status
   , MimeRender ctype chunk
   , ReflectMethod method
   , ToSourceIO chunk a
@@ -421,69 +411,11 @@ instance
   where
   type ServerT (Stream method status framing ctype a) m = m a
   hoistServerWithContext _ _ nt = nt
-
-  route Proxy _ = streamRouter ([],) method status (Proxy :: Proxy framing) (Proxy :: Proxy ctype)
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-      status = statusFromNat (Proxy :: Proxy status)
-
-instance
-  {-# OVERLAPPING #-}
-  ( FramingRender framing
-  , GetHeaders (Headers h a)
-  , KnownNat status
-  , MimeRender ctype chunk
-  , ReflectMethod method
-  , ToSourceIO chunk a
-  )
-  => HasServer (Stream method status framing ctype (Headers h a)) context
-  where
-  type ServerT (Stream method status framing ctype (Headers h a)) m = m (Headers h a)
-  hoistServerWithContext _ _ nt = nt
-
-  route Proxy _ = streamRouter (\x -> (getHeaders x, getResponse x)) method status (Proxy :: Proxy framing) (Proxy :: Proxy ctype)
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-      status = statusFromNat (Proxy :: Proxy status)
-
-streamRouter
-  :: forall ctype a c chunk env framing
-   . (FramingRender framing, MimeRender ctype chunk, ToSourceIO chunk a)
-  => (c -> ([(HeaderName, B.ByteString)], a))
-  -> Method
-  -> Status
-  -> Proxy framing
-  -> Proxy ctype
-  -> Delayed env (Handler c)
-  -> Router env
-streamRouter splitHeaders method status framingproxy ctypeproxy action = leafRouter $ \env request respond ->
-  let AcceptHeader accH = getAcceptHeader request
-      cmediatype = NHM.matchAccept [contentType ctypeproxy] accH
-      accCheck = when (isNothing cmediatype) $ delayedFail err406
-      contentHeader = (hContentType, NHM.renderHeader . maybeToList $ cmediatype)
-   in runAction
-        ( action
-            `addMethodCheck` methodCheck method request
-            `addAcceptCheck` accCheck
-        )
-        env
-        request
-        respond
-        $ \output ->
-          let (headers, fa) = splitHeaders output
-              sourceT = toSourceIO fa
-              S.SourceT kStepLBS = framingRender framingproxy (mimeRender ctypeproxy :: chunk -> BSL.ByteString) sourceT
-           in Route $ responseStream status (contentHeader : headers) $ \write flush -> do
-                let loop S.Stop = flush
-                    loop (S.Error err) = fail err -- TODO: throw better error
-                    loop (S.Skip s) = loop s
-                    loop (S.Effect ms) = ms >>= loop
-                    loop (S.Yield lbs s) = do
-                      write (BB.lazyByteString lbs)
-                      flush
-                      loop s
-
-                kStepLBS loop
+  route Proxy ctx action =
+    route
+      (Proxy @(MultiVerb method '[ctype] '[RespondStreamingFramed status "" framing ctype chunk] (SourceIO chunk)))
+      ctx
+      (fmap (fmap toSourceIO) action)
 
 -- | If you use 'Header' in one of the endpoints for your API,
 -- this automatically requires your server-side handler to be a function
