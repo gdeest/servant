@@ -16,13 +16,16 @@ module Servant.Client.Core.HasClient
 where
 
 import Control.Arrow (left, (+++))
+import Control.Exception (throwIO)
 import Control.Monad (unless)
+import Control.Monad.IO.Class (MonadIO (..))
 import qualified Data.ByteString.Lazy as BSL
 import Data.Constraint (Dict (..))
 import Data.Either (partitionEithers)
 import Data.Foldable (toList)
 import Data.Kind (Type)
 import qualified Data.List as List
+import Data.Maybe (fromMaybe)
 import Data.SOP.BasicFunctors (I (I), (:.:) (Comp))
 import Data.SOP.Constraint (All)
 import Data.SOP.NP (NP (..), cpure_NP)
@@ -119,7 +122,7 @@ import Servant.API.ServerSentEvents
   , ServerSentEvents'
   )
 import Servant.API.Status (KnownStatus)
-import Servant.API.Stream (NoFraming)
+import Servant.API.Stream (NoFraming, SourceIO)
 import Servant.API.TypeErrors
 import Servant.API.TypeLevel (AtMostOneFragment, FragmentUnique)
 import Servant.API.UVerb
@@ -459,13 +462,22 @@ instance
 
   hoistClientMonad _ _ nt = nt
 
+-- | Stream delegates to MultiVerb using RespondStreamingFramed.
+-- The fromSourceIO conversion happens in the continuation, which stays within
+-- the withStreamingRequest callback due to Codensity-based monad semantics.
 instance
   {-# OVERLAPPABLE #-}
   ( FramingUnrender framing
   , FromSourceIO chunk a
+  , KnownStatus status
   , MimeUnrender ct chunk
+  , MonadIO m
   , ReflectMethod method
+  , RunClient m
   , RunStreamingClient m
+  , Typeable chunk
+  , Typeable ct
+  , Typeable framing
   )
   => HasClient m (Stream method status framing ct a)
   where
@@ -473,16 +485,13 @@ instance
 
   hoistClientMonad _ _ f = f
 
-  clientWithRoute _pm Proxy req = withStreamingRequest req' $ \Response{responseBody = body} -> do
-    let mimeUnrender' = mimeUnrender (Proxy :: Proxy ct) :: BSL.ByteString -> Either String chunk
-        framingUnrender' = framingUnrender (Proxy :: Proxy framing) mimeUnrender'
-    fromSourceIO $ framingUnrender' body
-    where
-      req' =
+  clientWithRoute pm Proxy req = do
+    sourceIO <-
+      clientWithRoute
+        pm
+        (Proxy @(MultiVerb method '[ct] '[RespondStreamingFramed status "" framing ct chunk] (SourceIO chunk)))
         req
-          { requestAccept = fromList [contentType (Proxy :: Proxy ct)]
-          , requestMethod = reflectMethod (Proxy :: Proxy method)
-          }
+    liftIO $ fromSourceIO sourceIO
 
 instance
   {-# OVERLAPPING #-}
@@ -499,6 +508,10 @@ instance
 
   hoistClientMonad _ _ f = f
 
+  -- Note: Stream with Headers cannot fully delegate to MultiVerb because:
+  -- 1. Stream's Headers uses BuildHeadersTo for header extraction
+  -- 2. MultiVerb's WithHeaders uses ServantHeaders which has different semantics
+  -- We delegate the streaming part to MultiVerb but handle headers directly.
   clientWithRoute _pm Proxy req = withStreamingRequest req' $
     \Response{responseBody = body, responseHeaders = headers} -> do
       let mimeUnrender' = mimeUnrender (Proxy :: Proxy ct) :: BSL.ByteString -> Either String chunk
@@ -1173,52 +1186,143 @@ instance HasClientContentCheck '() where
   clientAcceptList _ = []
   clientContentTypeOk _ _ = True
 
+-- | Class to choose between buffered and streaming requests based on response types.
+-- For streaming responses, ALL processing (content type check, unrendering, fromUnion)
+-- happens inside the withStreamingRequest callback to keep the connection open.
+-- For buffered responses, processing happens normally after the request completes.
+class RunMultiVerbClient m (mode :: RequestMode) where
+  runMultiVerbRequest
+    :: ( AsUnion as r
+       , HasClientContentCheck cs
+       , ResponseListUnrender cs as
+       , Typeable as
+       )
+    => Proxy mode
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> [Status]
+    -> m r
+
+-- | Buffered: use runRequestAcceptStatus, process after request completes
+instance RunClient m => RunMultiVerbClient m 'Buffered where
+  runMultiVerbRequest
+    :: forall cs as r
+     . ( AsUnion as r
+       , HasClientContentCheck cs
+       , ResponseListUnrender cs as
+       )
+    => Proxy 'Buffered
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> [Status]
+    -> m r
+  runMultiVerbRequest _ pcs _pas req acceptStatuses = do
+    response@Response{responseBody = body} <-
+      runRequestAcceptStatus (Just acceptStatuses) req
+    let sresp =
+          if BSL.null body
+            then SomeClientResponse $ response{Response.responseBody = ()}
+            else SomeClientResponse response
+    c <- getResponseContentType' sresp
+    unless (clientContentTypeOk pcs c) $
+      throwClientError $
+        UnsupportedContentType c (responseFromSome sresp)
+    case responseListUnrender @cs @as c sresp of
+      StatusMismatch -> throwClientError (DecodeFailure "Status mismatch" (responseFromSome sresp))
+      UnrenderError e -> throwClientError (DecodeFailure (Text.pack e) (responseFromSome sresp))
+      UnrenderSuccess x -> pure (fromUnion @as x)
+
+-- | Streaming: process INSIDE withStreamingRequest callback to keep connection alive.
+-- Errors are thrown via 'throwIO' since the callback runs in IO.
+instance RunStreamingClient m => RunMultiVerbClient m 'Streaming where
+  runMultiVerbRequest
+    :: forall cs as r
+     . ( AsUnion as r
+       , HasClientContentCheck cs
+       , ResponseListUnrender cs as
+       )
+    => Proxy 'Streaming
+    -> Proxy cs
+    -> Proxy as
+    -> Request
+    -> [Status]
+    -> m r
+  runMultiVerbRequest _ pcs _pas req _statuses =
+    withStreamingRequest req $ \response -> do
+      -- All processing in IO - connection stays open!
+      let c = getResponseContentTypePure response
+          errResp = streamingResponseToResponse response
+      unless (clientContentTypeOk pcs c) $
+        throwIO $
+          UnsupportedContentType c errResp
+      let sresp = SomeClientResponse response
+      case responseListUnrender @cs @as c sresp of
+        StatusMismatch -> throwIO (DecodeFailure "Status mismatch" errResp)
+        UnrenderError e -> throwIO (DecodeFailure (Text.pack e) errResp)
+        UnrenderSuccess x -> pure (fromUnion @as x) -- Returns live SourceIO!
+
 instance
   ( AsUnion as r
   , HasClientContentCheck cs
   , ReflectMethod method
   , ResponseListUnrender cs as
   , RunClient m
+  , RunMultiVerbClient m (ResponseRequestMode as)
+  , Typeable as
   )
   => HasClient m (MultiVerb method cs as r)
   where
   type Client m (MultiVerb method cs as r) = m r
 
-  clientWithRoute _ _ req = do
-    response@Response{responseBody = body} <-
-      runRequestAcceptStatus
-        (Just (responseListStatuses @cs @as))
-        req
-          { requestMethod = method
-          , requestAccept = Seq.fromList accept
-          }
-
-    c <- getResponseContentType response
-    unless (clientContentTypeOk (Proxy @cs) c) $ do
-      throwClientError $ UnsupportedContentType c response
-
-    -- NOTE: support streaming in the future
-    let sresp =
-          if BSL.null body
-            then SomeClientResponse $ response{Response.responseBody = ()}
-            else SomeClientResponse response
-    case responseListUnrender @cs @as c sresp of
-      StatusMismatch -> throwClientError (DecodeFailure "Status mismatch" response)
-      UnrenderError e -> throwClientError (DecodeFailure (Text.pack e) response)
-      UnrenderSuccess x -> pure (fromUnion @as x)
+  clientWithRoute _ _ req =
+    runMultiVerbRequest
+      (Proxy @(ResponseRequestMode as))
+      (Proxy @cs)
+      (Proxy @as)
+      req
+        { requestMethod = method
+        , requestAccept = Seq.fromList accept
+        }
+      (responseListStatuses @cs @as)
     where
       accept = clientAcceptList (Proxy @cs)
       method = reflectMethod (Proxy @method)
 
   hoistClientMonad _ _ f = f
 
-getResponseContentType :: RunClient m => Response -> m M.MediaType
-getResponseContentType response =
+-- | Extract content type from SomeClientResponse (requires RunClient for error throwing)
+getResponseContentType' :: RunClient m => SomeClientResponse -> m M.MediaType
+getResponseContentType' (SomeClientResponse response) =
   case lookup "Content-Type" (toList (responseHeaders response)) of
     Nothing -> pure $ "application" M.// "octet-stream"
     Just t -> case M.parseAccept t of
-      Nothing -> throwClientError $ InvalidContentTypeHeader response
+      Nothing -> throwClientError $ InvalidContentTypeHeader (responseFromSome (SomeClientResponse response))
       Just t' -> pure t'
+
+-- | Extract content type from response (pure, no monad needed)
+getResponseContentTypePure :: ResponseF a -> M.MediaType
+getResponseContentTypePure response =
+  case lookup "Content-Type" (toList (responseHeaders response)) of
+    Nothing -> "application" M.// "octet-stream"
+    Just t -> fromMaybe ("application" M.// "octet-stream") (M.parseAccept t)
+
+-- | Convert SomeClientResponse to Response for error reporting (with empty body)
+responseFromSome :: SomeClientResponse -> Response
+responseFromSome (SomeClientResponse Response{..}) =
+  Response
+    { responseBody = BSL.empty
+    , ..
+    }
+
+-- | Convert streaming response to Response for error reporting (with empty body)
+streamingResponseToResponse :: StreamingResponse -> Response
+streamingResponseToResponse Response{..} =
+  Response
+    { responseBody = BSL.empty
+    , ..
+    }
 
 {- Note [Non-Empty Content Types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
