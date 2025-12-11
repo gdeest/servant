@@ -87,10 +87,11 @@ library
     Servant.Client.Core.BasicAuth
     Servant.Client.Core.ClientError
     Servant.Client.Core.HasClient
+    Servant.Client.Core.MultiVerb.ResponseUnrender
+    Servant.Client.Core.NewVerbClient
     Servant.Client.Core.Reexport
     Servant.Client.Core.Request
     Servant.Client.Core.Response
-    Servant.Client.Core.MultiVerb.ResponseUnrender
     Servant.Client.Core.RunClient
     Servant.Client.Core.ServerSentEvents
     Servant.Client.Free

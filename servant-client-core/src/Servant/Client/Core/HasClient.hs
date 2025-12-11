@@ -136,10 +136,16 @@ import Servant.API.UVerb
   )
 import Prelude ()
 
+import Servant.API.Experimental.Verb
+  ( ClassifyResponse
+  , HandlerReturn
+  , NewVerb
+  )
 import Servant.Client.Core.Auth
 import Servant.Client.Core.BasicAuth
 import Servant.Client.Core.ClientError
 import Servant.Client.Core.MultiVerb.ResponseUnrender
+import Servant.Client.Core.NewVerbClient (VerbClient (..))
 import Servant.Client.Core.Request
 import Servant.Client.Core.Response
 import qualified Servant.Client.Core.Response as Response
@@ -1317,6 +1323,26 @@ decodedAs response@Response{responseBody = body} ct = do
     Right val -> pure val
   where
     accept = toList $ contentTypes ct
+
+-------------------------------------------------------------------------------
+-- NewVerb (Servant 2.0 unified verb)
+-------------------------------------------------------------------------------
+
+instance
+  ( RunClient m
+  , ReflectMethod method
+  , VerbClient (ClassifyResponse a) a
+  )
+  => HasClient m (NewVerb method a)
+  where
+  type Client m (NewVerb method a) = m (HandlerReturn a)
+  clientWithRoute _ _ req =
+    clientVerb
+      (Proxy @(ClassifyResponse a))
+      (Proxy @a)
+      (reflectMethod (Proxy @method))
+      req
+  hoistClientMonad _ _ f = f
 
 -------------------------------------------------------------------------------
 -- Custom type errors
