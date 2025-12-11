@@ -35,7 +35,7 @@ import qualified Data.Text as T
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Typeable
-import GHC.TypeLits (KnownNat, KnownSymbol, TypeError, symbolVal)
+import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import Network.HTTP.Media (MediaType, matches, parseAccept)
 import qualified Network.HTTP.Media as M
 import qualified Network.HTTP.Media as Media
@@ -98,7 +98,6 @@ import Servant.API.ContentTypes
   ( AllMime (allMime)
   , AllMimeUnrender (allMimeUnrender)
   , EventStream
-  , contentTypes
   )
 import Servant.API.Generic
   ( GenericMode (..)
@@ -119,7 +118,7 @@ import Servant.API.ServerSentEvents
   ( EventKind (JsonEvent, RawEvent)
   , ServerSentEvents'
   )
-import Servant.API.Status (statusFromNat)
+import Servant.API.Status (KnownStatus)
 import Servant.API.Stream (NoFraming)
 import Servant.API.TypeErrors
 import Servant.API.TypeLevel (AtMostOneFragment, FragmentUnique)
@@ -305,129 +304,65 @@ instance
   hoistClientMonad pm _ f cl = hoistClientMonad pm (Proxy :: Proxy sublayout) f . cl
 
 instance
--- Note [Non-Empty Content Types]
-
   {-# OVERLAPPABLE #-}
-  ( KnownNat status
-  , MimeUnrender ct a
+  ( HasClientContentCheck ctypes
   , ReflectMethod method
+  , ResponseListUnrender ctypes '[Respond status "" a]
   , RunClient m
-  , cts' ~ (ct ': cts)
   )
-  => HasClient m (Verb method status cts' a)
+  => HasClient m (Verb method status ctypes a)
   where
-  type Client m (Verb method status cts' a) = m a
-  clientWithRoute _pm Proxy req = do
-    response <-
-      runRequestAcceptStatus
-        (Just [status])
-        req
-          { requestAccept = fromList $ toList accept
-          , requestMethod = method
-          }
-    response `decodedAs` (Proxy :: Proxy ct)
-    where
-      accept = contentTypes (Proxy :: Proxy ct)
-      method = reflectMethod (Proxy :: Proxy method)
-      status = statusFromNat (Proxy :: Proxy status)
-
+  type Client m (Verb method status ctypes a) = m a
+  clientWithRoute pm Proxy = clientWithRoute pm (Proxy @(MultiVerb method ctypes '[Respond status "" a] a))
   hoistClientMonad _ _ f = f
 
 instance
   {-# OVERLAPPING #-}
-  ( KnownNat status
+  ( KnownStatus status
   , ReflectMethod method
   , RunClient m
   )
-  => HasClient m (Verb method status cts NoContent)
+  => HasClient m (Verb method status ctypes NoContent)
   where
-  type
-    Client m (Verb method status cts NoContent) =
-      m NoContent
-  clientWithRoute _pm Proxy req = do
-    _response <- runRequestAcceptStatus (Just [status]) req{requestMethod = method}
-    pure NoContent
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-      status = statusFromNat (Proxy :: Proxy status)
+  type Client m (Verb method status ctypes NoContent) = m NoContent
+  clientWithRoute pm Proxy req =
+    NoContent
+      <$ clientWithRoute pm (Proxy @(MultiVerb method '() '[RespondAs '() status "" ()] ())) req
+  hoistClientMonad _ _ f = f
 
+instance
+  {-# OVERLAPPING #-}
+  ( HasClientContentCheck ctypes
+  , ReflectMethod method
+  , ResponseListUnrender ctypes '[WithHeaders h (Headers h a) (Respond status "" a)]
+  , RunClient m
+  )
+  => HasClient m (Verb method status ctypes (Headers h a))
+  where
+  type Client m (Verb method status ctypes (Headers h a)) = m (Headers h a)
+  clientWithRoute pm Proxy = clientWithRoute pm (Proxy @(MultiVerb method ctypes '[WithHeaders h (Headers h a) (Respond status "" a)] (Headers h a)))
+  hoistClientMonad _ _ f = f
+
+instance
+  {-# OVERLAPPING #-}
+  ( ReflectMethod method
+  , ResponseListUnrender '() '[WithHeaders h (Headers h NoContent) (RespondAs '() status "" ())]
+  , RunClient m
+  )
+  => HasClient m (Verb method status ctypes (Headers h NoContent))
+  where
+  type Client m (Verb method status ctypes (Headers h NoContent)) = m (Headers h NoContent)
+  clientWithRoute pm Proxy = clientWithRoute pm (Proxy @(MultiVerb method '() '[WithHeaders h (Headers h NoContent) (RespondAs '() status "" ())] (Headers h NoContent)))
   hoistClientMonad _ _ f = f
 
 instance
   (ReflectMethod method, RunClient m)
   => HasClient m (NoContentVerb method)
   where
-  type
-    Client m (NoContentVerb method) =
-      m NoContent
-  clientWithRoute _pm Proxy req = do
-    _response <- runRequest req{requestMethod = method}
-    pure NoContent
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-
-  hoistClientMonad _ _ f = f
-
-instance
--- Note [Non-Empty Content Types]
-
-  {-# OVERLAPPING #-}
-  ( BuildHeadersTo ls
-  , KnownNat status
-  , MimeUnrender ct a
-  , ReflectMethod method
-  , RunClient m
-  , cts' ~ (ct ': cts)
-  )
-  => HasClient m (Verb method status cts' (Headers ls a))
-  where
-  type
-    Client m (Verb method status cts' (Headers ls a)) =
-      m (Headers ls a)
-  clientWithRoute _pm Proxy req = do
-    response <-
-      runRequestAcceptStatus
-        (Just [status])
-        req
-          { requestMethod = method
-          , requestAccept = fromList $ toList accept
-          }
-    val <- response `decodedAs` (Proxy :: Proxy ct)
-    pure $
-      Headers
-        { getResponse = val
-        , getHeadersHList = buildHeadersTo . toList $ responseHeaders response
-        }
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-      accept = contentTypes (Proxy :: Proxy ct)
-      status = statusFromNat (Proxy :: Proxy status)
-
-  hoistClientMonad _ _ f = f
-
-instance
-  {-# OVERLAPPING #-}
-  ( BuildHeadersTo ls
-  , KnownNat status
-  , ReflectMethod method
-  , RunClient m
-  )
-  => HasClient m (Verb method status cts (Headers ls NoContent))
-  where
-  type
-    Client m (Verb method status cts (Headers ls NoContent)) =
-      m (Headers ls NoContent)
-  clientWithRoute _pm Proxy req = do
-    response <- runRequestAcceptStatus (Just [status]) req{requestMethod = method}
-    pure $
-      Headers
-        { getResponse = NoContent
-        , getHeadersHList = buildHeadersTo . toList $ responseHeaders response
-        }
-    where
-      method = reflectMethod (Proxy :: Proxy method)
-      status = statusFromNat (Proxy :: Proxy status)
-
+  type Client m (NoContentVerb method) = m NoContent
+  clientWithRoute pm Proxy req =
+    NoContent
+      <$ clientWithRoute pm (Proxy @(MultiVerb method '() '[RespondAs '() 204 "" ()] ())) req
   hoistClientMonad _ _ f = f
 
 data ClientParseError = ClientParseError MediaType String | ClientStatusMismatch | ClientNoMatchingStatus
@@ -1232,16 +1167,29 @@ x // f = f x
 (/:) :: (a -> b -> c) -> b -> a -> c
 (/:) = flip
 
+-- | Class for content-type checking that handles both normal content types
+-- and the '() case for NoContent verbs.
+class HasClientContentCheck cs where
+  clientAcceptList :: Proxy cs -> [M.MediaType]
+  clientContentTypeOk :: Proxy cs -> M.MediaType -> Bool
+
+instance AllMime cs => HasClientContentCheck cs where
+  clientAcceptList = allMime
+  clientContentTypeOk p c = any (M.matches c) (allMime p)
+
+instance HasClientContentCheck '() where
+  clientAcceptList _ = []
+  clientContentTypeOk _ _ = True
+
 -- | Class to dispatch MultiVerb requests based on whether streaming is required.
 --
 -- For buffered requests (no streaming responses), we use 'runRequestAcceptStatus'.
 -- For streaming requests, we use 'withStreamingRequest' to keep the connection
 -- open while the stream is consumed.
-class RunMultiVerbClient m (mode :: RequestMode) where
+class RunMultiVerbClient m (mode :: RequestMode) cs where
   runMultiVerbRequest
-    :: forall cs as r
-     . ( AllMime cs
-       , AsUnion as r
+    :: forall as r
+     . ( AsUnion as r
        , ResponseListUnrender cs as
        )
     => Proxy mode
@@ -1251,11 +1199,10 @@ class RunMultiVerbClient m (mode :: RequestMode) where
     -> m r
 
 -- | Buffered instance: uses runRequestAcceptStatus (existing behavior).
-instance RunClient m => RunMultiVerbClient m 'Buffered where
+instance (HasClientContentCheck cs, RunClient m) => RunMultiVerbClient m 'Buffered cs where
   runMultiVerbRequest
-    :: forall cs as r
-     . ( AllMime cs
-       , AsUnion as r
+    :: forall as r
+     . ( AsUnion as r
        , ResponseListUnrender cs as
        )
     => Proxy 'Buffered
@@ -1269,7 +1216,7 @@ instance RunClient m => RunMultiVerbClient m 'Buffered where
         (Just (responseListStatuses @cs @as))
         req
     c <- getResponseContentType response
-    unless (any (M.matches c) (allMime (Proxy @cs))) $ do
+    unless (clientContentTypeOk (Proxy @cs) c) $ do
       throwClientError $ UnsupportedContentType c response
     let sresp =
           if BSL.null body
@@ -1282,11 +1229,10 @@ instance RunClient m => RunMultiVerbClient m 'Buffered where
 
 -- | Streaming instance: uses withStreamingRequest to keep the connection open.
 -- All processing happens inside the callback so the stream can be consumed.
-instance RunStreamingClient m => RunMultiVerbClient m 'Streaming where
+instance (HasClientContentCheck cs, RunStreamingClient m) => RunMultiVerbClient m 'Streaming cs where
   runMultiVerbRequest
-    :: forall cs as r
-     . ( AllMime cs
-       , AsUnion as r
+    :: forall as r
+     . ( AsUnion as r
        , ResponseListUnrender cs as
        )
     => Proxy 'Streaming
@@ -1297,7 +1243,7 @@ instance RunStreamingClient m => RunMultiVerbClient m 'Streaming where
   runMultiVerbRequest _ _ _ req =
     withStreamingRequest req $ \response -> do
       let c = getStreamingResponseContentType response
-      unless (any (M.matches c) (allMime (Proxy @cs))) $ do
+      unless (clientContentTypeOk (Proxy @cs) c) $ do
         -- We're in IO here, so use fail to signal error (will become ClientError)
         fail $ "Unsupported content type: " ++ show c
       let sresp = SomeClientResponse response
@@ -1316,12 +1262,12 @@ getStreamingResponseContentType response =
       Just t' -> t'
 
 instance
-  ( AllMime cs
-  , AsUnion as r
+  ( AsUnion as r
+  , HasClientContentCheck cs
   , ReflectMethod method
   , ResponseListUnrender cs as
   , RunClient m
-  , RunMultiVerbClient m (ResponseRequestMode as)
+  , RunMultiVerbClient m (ResponseRequestMode as) cs
   )
   => HasClient m (MultiVerb method cs as r)
   where
@@ -1334,7 +1280,7 @@ instance
       (Proxy @as)
       req
         { requestMethod = reflectMethod (Proxy @method)
-        , requestAccept = Seq.fromList (allMime (Proxy @cs))
+        , requestAccept = Seq.fromList (clientAcceptList (Proxy @cs))
         }
 
   hoistClientMonad _ _ f = f
@@ -1374,23 +1320,6 @@ checkContentTypeHeader response =
     Just t -> case parseAccept t of
       Nothing -> throwClientError $ InvalidContentTypeHeader response
       Just t' -> pure t'
-
-decodedAs
-  :: forall ct a m
-   . (MimeUnrender ct a, RunClient m)
-  => Response
-  -> Proxy ct
-  -> m a
-decodedAs response@Response{responseBody = body} ct = do
-  responseContentType <- checkContentTypeHeader response
-  unless (any (matches responseContentType) accept) $
-    throwClientError $
-      UnsupportedContentType responseContentType response
-  case mimeUnrender ct body of
-    Left err -> throwClientError $ DecodeFailure (T.pack err) response
-    Right val -> pure val
-  where
-    accept = toList $ contentTypes ct
 
 -------------------------------------------------------------------------------
 -- Custom type errors
