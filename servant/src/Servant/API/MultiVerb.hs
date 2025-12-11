@@ -187,14 +187,13 @@ instance
     constructHeader @h x
       <> constructHeaders @headers xs
 
-  -- NOTE: should we concatenate all the matching headers instead of just taking the first one?
   extractHeaders headers = do
     let name' = headerName @name
-        (headers0, headers1) = Seq.partition (\(h, _) -> h == name') headers
-    x <- case headers0 of
-      Seq.Empty -> empty
-      ((_, h) :<| _) -> either (const empty) pure (parseHeader h)
-    xs <- extractHeaders @headers headers1
+    idx <- Seq.findIndexL (\(h, _) -> h == name') headers
+    let (_, val) = Seq.index headers idx
+        headers' = Seq.deleteAt idx headers
+    x <- either (const empty) pure (parseHeader val)
+    xs <- extractHeaders @headers headers'
     pure (I x :* xs)
 
 class ServantHeader h (name :: Symbol) x | h -> name x where
