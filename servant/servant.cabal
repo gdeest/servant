@@ -86,6 +86,7 @@ library
     Servant.API.Description
     Servant.API.Empty
     Servant.API.Experimental.Auth
+    Servant.API.Experimental.Verb
     Servant.API.Fragment
     Servant.API.Generic
     Servant.API.Header
