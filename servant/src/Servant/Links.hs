@@ -142,6 +142,7 @@ import Servant.API.Capture (Capture', CaptureAll)
 import Servant.API.Description (Description, OperationId, Summary)
 import Servant.API.Empty (EmptyAPI (..))
 import Servant.API.Experimental.Auth (AuthProtect)
+import Servant.API.Experimental.Verb (NewVerb)
 import Servant.API.Fragment (Fragment)
 import Servant.API.Generic
 import Servant.API.Header (Header')
@@ -694,6 +695,11 @@ instance {-# OVERLAPPABLE #-} TypeError (NoInstanceFor (HasLink api)) => HasLink
 
 instance HasLink (MultiVerb method cs as r) where
   type MkLink (MultiVerb method cs as r) a = a
+  toLink toA _ = toA
+
+-- NewVerb (Servant 2.0 unified verb)
+instance HasLink (NewVerb method a) where
+  type MkLink (NewVerb method a) r = r
   toLink toA _ = toA
 
 instance (HasLink sub, KnownSymbol sym, ToDeepQuery record) => HasLink (DeepQuery sym record :> sub) where

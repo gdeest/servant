@@ -299,11 +299,7 @@ acceptCheck proxy accH
   | otherwise = delayedFail err406
 
 canHandleAcceptH :: AllMime list => Proxy list -> AcceptHeader -> Bool
-canHandleAcceptH p (AcceptHeader h) = any (isMatch h) (allMime p)
+canHandleAcceptH p (AcceptHeader h) = isJust $ M.matchAccept (allMime p) h
   where
-    isMatch :: B.ByteString -> M.MediaType -> Bool
-    isMatch "*/*" _ = True
-    isMatch "" _ = True -- Empty Accept means accept anything
-    isMatch h' ct = case M.parseAccept h' of
-      Nothing -> False
-      Just accepted -> accepted `M.matches` ct
+    isJust Nothing = False
+    isJust (Just _) = True

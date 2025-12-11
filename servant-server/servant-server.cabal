@@ -178,6 +178,7 @@ test-suite spec
     Servant.Server.ErrorSpec
     Servant.Server.Internal.ContextSpec
     Servant.Server.Internal.RoutingApplicationSpec
+    Servant.Server.NewVerbSpec
     Servant.Server.RouterSpec
     Servant.Server.StaticFilesSpec
     Servant.Server.StreamingSpec
@@ -197,6 +198,7 @@ test-suite spec
     , safe
     , servant
     , servant-server
+    , sop-core
     , text
     , wai
 

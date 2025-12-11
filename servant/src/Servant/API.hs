@@ -76,6 +76,8 @@ module Servant.API
     -- * Experimental modules
   , module Servant.API.Experimental.Auth
     -- | General Authentication
+  , module Servant.API.Experimental.Verb
+    -- | Unified verb type (Servant 2.0 preview)
 
     -- * Links
   , module Servant.Links
@@ -108,6 +110,36 @@ import Servant.API.ContentTypes
 import Servant.API.Description (Description, OperationId, Summary)
 import Servant.API.Empty (EmptyAPI (..))
 import Servant.API.Experimental.Auth (AuthProtect)
+import Servant.API.Experimental.Verb
+  ( Delete'
+  , DeleteAccepted'
+  , DeleteMulti
+  , DeleteNoContent'
+  , Get'
+  , GetAccepted'
+  , GetMulti
+  , GetNoContent'
+  , NewVerb
+  , OneOf
+  , OneOf'
+  , Patch'
+  , PatchAccepted'
+  , PatchMulti
+  , PatchNoContent'
+  , Post'
+  , PostAccepted'
+  , PostCreated'
+  , PostMulti
+  , PostNoContent'
+  , Put'
+  , PutAccepted'
+  , PutCreated'
+  , PutMulti
+  , PutNoContent'
+  , Respond
+  , Responds
+  , RespondsEmpty
+  )
 import Servant.API.Fragment (Fragment)
 import Servant.API.Generic
   ( AsApi
