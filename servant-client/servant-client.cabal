@@ -144,6 +144,7 @@ test-suite spec
     Servant.GenericSpec
     Servant.HoistClientSpec
     Servant.MiddlewareSpec
+    Servant.NewVerbSpec
     Servant.StreamSpec
     Servant.SuccessSpec
     Servant.WrappedApiSpec
