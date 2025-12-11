@@ -13,6 +13,7 @@ module Servant.API.MultiVerb
   , RespondAs
   , RespondEmpty
   , RespondStreaming
+  , RespondStreamingFramed
 
     -- ** Headers
   , WithHeaders
@@ -88,6 +89,13 @@ type RespondEmpty s description = RespondAs '() s description ()
 -- that the handler return type is hardcoded to be 'SourceIO ByteString'.
 data RespondStreaming (s :: Nat) (description :: Symbol) (framing :: Type) (ct :: Type)
 
+-- | A streaming response with framing applied during rendering.
+--
+-- Unlike 'RespondStreaming' which expects pre-framed @SourceIO ByteString@,
+-- this accepts typed chunks and applies framing during response rendering.
+-- This is used internally by 'Stream' delegation to 'MultiVerb'.
+data RespondStreamingFramed (s :: Nat) (description :: Symbol) (framing :: Type) (ct :: Type) (chunk :: Type)
+
 -- | The result of parsing a response as a union alternative of type 'a'.
 --
 -- 'StatusMismatch' indicates that the response does not refer to the given
@@ -129,6 +137,8 @@ type instance ResponseType (Respond s description a) = a
 type instance ResponseType (RespondAs responseContentType s description a) = a
 
 type instance ResponseType (RespondStreaming s description framing ct) = SourceIO ByteString
+
+type instance ResponseType (RespondStreamingFramed s description framing ct chunk) = SourceIO chunk
 
 -- | This type adds response headers to a 'MultiVerb' response.
 data WithHeaders (headers :: [Type]) (returnType :: Type) (response :: Type)

@@ -19,15 +19,14 @@ import Servant.API.ContentTypes
   ( Accept
   , AcceptHeader (..)
   , AllMimeRender
-  , MimeRender
+  , MimeRender (..)
   , allMimeRender
   , contentType
-  , mimeRender
   )
 import Servant.API.MultiVerb
 import Servant.API.ResponseHeaders (GetHeaders (..), Headers, getResponse)
 import Servant.API.Status
-import Servant.API.Stream (SourceIO)
+import Servant.API.Stream (FramingRender (..), SourceIO)
 import Servant.API.UVerb.Union
 import Servant.Types.Internal.Response
 import qualified Servant.Types.SourceT as S
@@ -151,6 +150,24 @@ instance
       InternalResponse
         { statusCode = statusVal (Proxy @s)
         , responseBody = x
+        , headers = mempty
+        }
+
+instance
+  ( Accept ct
+  , FramingRender framing
+  , KnownStatus s
+  , MimeRender ct chunk
+  )
+  => ResponseRender cs (RespondStreamingFramed s desc framing ct chunk)
+  where
+  type ResponseStatus (RespondStreamingFramed s desc framing ct chunk) = s
+  type ResponseBody (RespondStreamingFramed s desc framing ct chunk) = SourceIO ByteString
+  responseRender _ sourceChunks =
+    pure . addContentType @ct $
+      InternalResponse
+        { statusCode = statusVal (Proxy @s)
+        , responseBody = BSL.toStrict <$> framingRender (Proxy @framing) (mimeRender (Proxy @ct)) sourceChunks
         , headers = mempty
         }
 
