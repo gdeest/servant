@@ -413,7 +413,7 @@ instance
   hoistServerWithContext _ _ nt = nt
   route Proxy ctx action =
     route
-      (Proxy @(MultiVerb method '[ctype] '[RespondStreamingFramed status "" framing ctype chunk] (SourceIO chunk)))
+      (Proxy @(MultiVerb method '[ctype] '[RespondStream status "" framing ctype chunk] (SourceIO chunk)))
       ctx
       (fmap (fmap toSourceIO) action)
 

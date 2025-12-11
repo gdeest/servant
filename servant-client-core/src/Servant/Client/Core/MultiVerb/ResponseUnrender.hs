@@ -32,6 +32,17 @@ import Servant.API.UVerb.Union (Union)
 import Servant.Client.Core.Response (ResponseF (..))
 import qualified Servant.Client.Core.Response as Response
 
+-- | Request mode for MultiVerb client dispatch.
+-- Determines whether requests use buffered or streaming transport.
+data RequestMode = Buffered | Streaming
+
+-- | Detect if any response in the list requires streaming
+type family ResponseRequestMode (as :: [Type]) :: RequestMode where
+  ResponseRequestMode '[] = 'Buffered
+  ResponseRequestMode (RespondStreaming _ _ _ _ ': _) = 'Streaming
+  ResponseRequestMode (RespondStream _ _ _ _ _ ': _) = 'Streaming
+  ResponseRequestMode (_ ': as) = ResponseRequestMode as
+
 data SomeClientResponse = forall a. Typeable a => SomeClientResponse (ResponseF a)
 
 fromSomeClientResponse
@@ -113,6 +124,20 @@ instance
   responseUnrender _ resp = do
     guard (Response.responseStatusCode resp == statusVal (Proxy @s))
     pure $ Response.responseBody resp
+
+instance
+  ( FramingUnrender framing
+  , KnownStatus s
+  , MimeUnrender ct chunk
+  )
+  => ResponseUnrender cs (RespondStream s desc framing ct chunk)
+  where
+  type ResponseStatus (RespondStream s desc framing ct chunk) = s
+  type ResponseBody (RespondStream s desc framing ct chunk) = SourceIO ByteString
+
+  responseUnrender _ resp = do
+    guard (Response.responseStatusCode resp == statusVal (Proxy @s))
+    pure $ framingUnrender (Proxy @framing) (mimeUnrender (Proxy @ct)) (Response.responseBody resp)
 
 instance
   (AllMimeUnrender cs a, KnownStatus s)
